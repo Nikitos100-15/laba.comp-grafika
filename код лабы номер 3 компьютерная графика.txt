@@ -1,0 +1,225 @@
+from math import radians
+
+import numpy as np
+from PIL import Image, ImageOps
+import math
+import random
+
+# 1 и 2 задание
+img_matrix = np.zeros((2000, 2000, 3), dtype=np.uint8)
+# Инициализация z-буфера
+z_buffer = np.full((2000, 2000), 1000000.0)  # большое начальное значение
+
+for i in range(1000):
+    for j in range(1000):
+        if (i, j) == (100, 100):
+            img_matrix[i, j] = [0, 255, 0]
+
+
+# выбор шага
+def draw_line1(img, x0, y0, x1, y1, color):
+    count = 150
+    step = 1 / count
+    for t in np.arange(0, 1, step):
+        x = round((1.0 - t) * x0 + t * x1)
+        y = round((1.0 - t) * y0 + t * y1)
+        img[y, x] = color
+
+
+# небольшой фикс
+def draw_line2(image, x0, y0, x1, y1, color):
+    count = 130
+    step = 1.0 / count
+    for t in np.arange(0, 1, step):
+        x = round((1.0 - t) * x0 + t * x1)
+        y = round((1.0 - t) * y0 + t * y1)
+        image[y, x] = color
+
+
+# цикл по x
+def draw_line3(image, x0, y0, x1, y1, color):
+    for x in range(x0, x1):
+        t = (x - x0) / (x1 - x0)
+        y = round((1.0 - t) * y0 + t * y1)
+        image[y, x] = color
+
+
+# фикс 1
+def draw_line4(image, x0, y0, x1, y1, color):
+    if (x0 > x1):
+        x0, x1 = x1, x0
+        y0, y1 = y1, y0
+    for x in range(x0, x1):
+        t = (x - x0) / (x1 - x0)
+        y = round((1.0 - t) * y0 + t * y1)
+        image[y, x] = color
+
+
+# фикс 2
+def draw_line5(image, x0, y0, x1, y1, color):
+    xchange = False
+    if (abs(x0 - x1) < abs(y0 - y1)):
+        x0, y0 = y0, x0
+        x1, y1 = y1, x1
+        xchange = True
+    if (x0 > x1):
+        x0, x1 = x1, x0
+        y0, y1 = y1, y0
+    for x in range(x0, x1):
+        t = (x - x0) / (x1 - x0)
+        y = round((1.0 - t) * y0 + t * y1)
+        if (xchange):
+            image[x, y] = color
+        else:
+            image[y, x] = color
+
+
+# дирихле
+def draw_line6(image, x0, y0, x1, y1, color):
+    xchange = False
+    if (abs(x0 - x1) < abs(y0 - y1)):
+        x0, y0 = y0, x0
+        x1, y1 = y1, x1
+        xchange = True
+
+    if (x0 > x1):
+        x0, x1 = x1, x0
+        y0, y1 = y1, y0
+    y = y0
+    dy = 2 * abs(y1 - y0)
+    derror = 0
+    y_update = 1 if y1 > y0 else -1
+    for x in range(x0, x1):
+        if (xchange):
+            image[x, y] = color
+        else:
+            image[y, x] = color
+        derror += dy
+        if (derror > (x1 - x0)):
+            derror -= 2 * (x1 - x0)
+            y += y_update
+
+
+# задание 7: функция вычисления барицентрических координат
+def barycentric_coordinates(x0, y0, x1, y1, x2, y2, x, y):
+    denominator = ((x0 - x2) * (y1 - y2) - (x1 - x2) * (y0 - y2))
+    if abs(denominator) < 1e-10:
+        return -1, -1, -1
+    lambda0 = ((x - x2) * (y1 - y2) - (x1 - x2) * (y - y2)) / denominator
+    lambda1 = ((x0 - x2) * (y - y2) - (x - x2) * (y0 - y2)) / denominator
+    lambda2 = 1.0 - lambda0 - lambda1
+    return lambda0, lambda1, lambda2
+
+
+# задание 8 отрисовка треугольников с z-буфером
+def drawing_triangles(img, x0, y0, x1, y1, x2, y2, color, z0, z1, z2):
+    height, width = img.shape[:2]
+    xmin = int(min(x0, x1, x2))
+    xmax = int(max(x0, x1, x2))
+    ymin = int(min(y0, y1, y2))
+    ymax = int(max(y0, y1, y2))
+    if xmin >= xmax or ymin >= ymax:
+        return
+
+    for y in range(ymin, ymax + 1):
+        for x in range(xmin, xmax + 1):
+            l0, l1, l2 = barycentric_coordinates(x0, y0, x1, y1, x2, y2, x, y)
+            if l0 >= 0 and l1 >= 0 and l2 >= 0:
+                z_current = l0 * z0 + l1 * z1 + l2 * z2
+                if z_current < z_buffer[y, x]:
+                    img[y, x] = color
+                    z_buffer[y, x] = z_current
+
+
+# 11 задание normal вычисление
+def normal(v0_vertex, v1_vertex, v2_vertex):
+    v0_ = np.array(v0_vertex)
+    v1_ = np.array(v1_vertex)
+    v2_ = np.array(v2_vertex)
+    vector1 = v1_ - v2_
+    vector2 = v1_ - v0_
+    normal_vector = np.cross(vector1, vector2)
+    return normal_vector
+
+
+# рисуем звездочку
+for k in range(15):
+    x0, y0 = 100, 100
+    x1 = int(100 + 95 * math.cos((2 * 3.14) * k / 15))
+    y1 = int(100 + 95 * math.sin((2 * 3.14) * k / 15))
+
+
+# 3 задание
+v = []
+file = open('model_1.obj')
+for i in file:
+    i1 = i.split()
+    if (i1[0] == 'v'):
+        v.append((float(i1[1]), float(i1[2]), float(i1[3])))
+file.close()
+
+# задание 5
+file = open('model_1.obj')
+k = []
+for i in file:
+    i1 = i.split()
+    if (i1[0] == 'f'):
+        k.append((int(i1[1].split('/')[0]), int(i1[2].split('/')[0]), int(i1[3].split('/')[0])))
+file.close()
+# задание третьей лаболаторной + 15 пункт
+t = [0.0, -0.04, 0.2]
+def rotate(v, t):
+    a = radians(22)
+    b = radians(307)
+    y = radians(3)
+    v_new = []
+    rx = np.array([[1, 0, 0], [0, math.cos(a), math.sin(a)], [0, -math.sin(a), math.cos(a)]])
+    ry = np.array([[math.cos(b), 0, math.sin(b)], [0, 1, 0], [-math.sin(b), 0, math.cos(b)]])
+    rz = np.array([[math.cos(y), math.sin(y), 0], [-math.sin(y), math.cos(y), 0], [0, 0, 1]])
+    R = rx @ ry @ rz
+    for i in range(len(v)):
+        v[i] =  R @ v[i] + t
+        v_new.append(v[i])
+    return v_new
+
+v = rotate(v, t)
+
+
+# 6 задание с освещением и z-буфером + 16 пункт  проективное преобразование
+for i in range(len(k)):
+    idx0 = k[i][0] - 1
+    idx1 = k[i][1] - 1
+    idx2 = k[i][2] - 1
+    v0_vertex = v[idx0]
+    v1_vertex = v[idx1]
+    v2_vertex = v[idx2]
+
+    z0 = v0_vertex[2]
+    z1 = v1_vertex[2]
+    z2 = v2_vertex[2]
+
+
+    x0 = (v0_vertex[0]/z0 * 1800 + 1000)
+    y0 = (v0_vertex[1]/z0 * 1800 + 1000)
+    x1 = (v1_vertex[0]/z1 * 1800 + 1000)
+    y1 = (v1_vertex[1]/z1 * 1800 + 1000)
+    x2 = (v2_vertex[0]/z2 * 1800 + 1000)
+    y2 = (v2_vertex[1]/z2 * 1800 + 1000)
+
+    n = normal(v0_vertex, v1_vertex, v2_vertex)
+    l = np.array([0, 0, 1])
+    n_norm = np.linalg.norm(n)
+    l_norm = np.linalg.norm(l)
+    n_normalized = n / n_norm
+    l_normalized = l / l_norm
+    cosine_angle = np.dot(n_normalized, l_normalized)
+
+    if cosine_angle < 0:
+        intensity = -255 * cosine_angle
+        color = [(intensity), 0, 0]
+        drawing_triangles(img_matrix, x0, y0, x1, y1, x2, y2, color, z0, z1, z2)
+
+img = Image.fromarray(img_matrix)
+img = ImageOps.flip(img)
+img.save('test2.jpg')
+
