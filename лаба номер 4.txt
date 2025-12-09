@@ -1,0 +1,260 @@
+import numpy as np
+from PIL import Image, ImageOps
+import random
+
+z_buffer = np.full((2000, 2000), np.inf, dtype=np.float32)
+img = np.zeros((2000, 2000, 3), dtype=np.uint8)
+
+
+# функция загрузки граней (треугольников) из OBJ файла
+def parse_f():
+    with open("model_1.obj", "r") as file:
+        parse_f = []
+        for line in file:
+            mas = line.strip().split()
+            if mas[0] == 'f':
+                mas_2 = [int(i.split('/')[0]) for i in mas[1:]]
+                parse_f.append(mas_2)
+        return parse_f
+
+
+# функция загрузки вершин из OBJ файла
+def parse_v():
+    parse_mass = []
+    with open("model_1.obj", 'r') as file:
+        for line in file:
+            mass = line.strip().split()
+            if mass[0] == 'v':
+                x = float(mass[1])
+                y = float(mass[2])
+                z = float(mass[3])
+                parse_mass.append([x, y, z])
+    return parse_mass
+
+
+# функция для вычисления барицентрических координат точки относительно треугольника 7 задание
+def barycentric_coordinates(x, y, x0, y0, x1, y1, x2, y2):
+    lambda0 = ((x - x2) * (y1 - y2) - (x1 - x2) * (y - y2)) / ((x0 - x2) * (y1 - y2) - (x1 - x2) * (y0 - y2))
+    lambda1 = ((x0 - x2) * (y - y2) - (x - x2) * (y0 - y2)) / ((x0 - x2) * (y1 - y2) - (x1 - x2) * (y0 - y2))
+    lambda2 = 1.0 - lambda0 - lambda1
+    return lambda0, lambda1, lambda2
+
+
+
+# функция загрузки текстурных координат (UV координат) из OBJ файла 18 задание 4 лаболаторная
+def parse_vt():
+    arr_vt = []
+    file = open("model_1.obj", "r")
+    for line in file:
+        mass = line.strip().split()
+        if mass[0] == 'vt':
+            u = float(mass[1])
+            v = float(mass[2])
+            arr_vt.append([u, v])
+    return arr_vt
+
+
+# Функция загрузки связей вершин с текстурными координатами
+def parse_f_with_texture():
+    with open("model_1.obj", "r") as file:
+        faces_with_texture = []
+        for line in file:
+            mas = line.strip().split()
+            if mas[0] == 'f':
+                face = []
+                for m in mas[1:]:
+                    part = m.split('/')
+                    v = int(part[0])
+                    vt = int(part[1])
+                    face.append((v, vt))
+                faces_with_texture.append(face)
+        return faces_with_texture
+
+
+
+
+# Основная функция отрисовки треугольника с текстурой и освещением
+def draw_triangle(x0, y0, z0, n0, tx0, ty0, x1, y1, z1, n1, tx1, ty1, x2, y2, z2, n2, tx2, ty2, img, texture):
+    # Проекция 3D координат в 2D
+    nx0, ny0, nx1, ny1, nx2, ny2 = zoom(x0, y0, z0, x1, y1, z1, x2, y2, z2)
+
+    # Определение ограничивающего прямоугольника (bounding box)
+    xmin = min(int(nx0), int(nx1), int(nx2))
+    if xmin < 0: xmin = 0
+    xmax = max(int(nx0), int(nx1), int(nx2))
+
+    ymin = min(int(ny0), int(ny1), int(ny2))
+    if ymin < 0: ymin = 0
+    ymax = max(int(ny0), int(ny1), int(ny2))
+
+    # Направление источника света
+    light = np.array([0, 0, 1])
+
+    # Вычисление интенсивности освещения в вершинах (по Гуро)
+    I0 = np.dot(n0, light)
+    I1 = np.dot(n1, light)
+    I2 = np.dot(n2, light)
+
+    # растеризация треугольника
+    for y in range(ymin, ymax + 1):
+        for x in range(xmin, xmax + 1):
+            coords = barycentric_coordinates(x, y, nx0, ny0, nx1, ny1, nx2, ny2)
+            lambda0, lambda1, lambda2 = coords
+
+            if lambda0 >= 0 and lambda1 >= 0 and lambda2 >= 0:
+                # интерполяция глубины
+                z = z0 * lambda0 + z1 * lambda1 + z2 * lambda2
+
+                # Проверка z-буфера
+                if (z > z_buffer[y][x]):
+                    continue
+                else:
+                    # Интерполяция освещения (затенение по Гуро)
+                    I = -1 * (lambda0 * I0 + lambda1 * I1 + lambda2 * I2)
+
+                    # Интерполяция текстурных координат
+                    u = lambda0 * tx0 + lambda1 * tx1 + lambda2 * tx2
+                    v = lambda0 * ty0 + lambda1 * ty1 + lambda2 * ty2
+
+                    # Преобразование в координаты текстуры
+                    texture_x_coord = int(u * bunny_atlas_width)
+                    texture_y_coord = int((1 - v) * (bunny_atlas_height - 1))
+
+                    # Получение цвета из текстуры и применение освещения
+                    texture_color = texture.getpixel((texture_x_coord, texture_y_coord))
+                    final_texture_color = I * np.array(texture_color)
+
+                    img[y, x] = final_texture_color
+                    z_buffer[y][x] = z
+
+
+# Функция обработки всех полигонов модели
+def draw_polygon(peaks, faces, vt, faces_with_texture):
+    # Вычисление нормалей вершин для затенения по Гуро
+    v_n = guro_shadow(peaks, faces)
+
+    # Обработка каждого треугольника
+    for face in faces_with_texture:
+        (v0_idx, vt0_idx), (v1_idx, vt1_idx), (v2_idx, vt2_idx) = face
+
+        # Преобразование индексов (в OBJ индексация с 1)
+        idx0, idx1, idx2 = v0_idx - 1, v1_idx - 1, v2_idx - 1
+
+        # Получение координат вершин
+        v0 = peaks[idx0]
+        v1 = peaks[idx1]
+        v2 = peaks[idx2]
+
+        x0 = v0[0]
+        x1 = v1[0]
+        x2 = v2[0]
+        y0 = v0[1]
+        y1 = v1[1]
+        y2 = v2[1]
+        z0 = v0[2]
+        z1 = v1[2]
+        z2 = v2[2]
+
+        # нормали вершин
+        n0 = v_n[idx0]
+        n1 = v_n[idx1]
+        n2 = v_n[idx2]
+
+        # текстурные координаты
+        tx0, ty0 = vt[vt0_idx - 1]
+        tx1, ty1 = vt[vt1_idx - 1]
+        tx2, ty2 = vt[vt2_idx - 1]
+
+        # проверка видимости треугольника
+        x = normalize(v0, v1, v2)
+        if (x[2] < 0):
+            draw_triangle(x0, y0, z0, n0, tx0, ty0, x1, y1, z1, n1, tx1, ty1, x2, y2, z2, n2, tx2, ty2, img, texture)
+
+
+# функция вычисления нормали треугольника
+def normalize(v0, v1, v2):
+    v0 = np.array(v0)
+    v1 = np.array(v1)
+    v2 = np.array(v2)
+    v1_v0 = v1 - v0
+    v2_v0 = v2 - v0
+    n = np.cross(v1_v0, v2_v0)
+    n /= np.linalg.norm(n)
+    return n
+
+# функция поворота и смещения модели
+def rotate(mas, t_X=-0.006, t_Y=-0.009, t_Z=0.5):
+    a = np.radians(22)
+    b = np.radians(307)
+    c = np.radians(3)
+
+    # матрицы поворота вокруг осей X, Y, Z
+    Rx = np.array([[1, 0, 0],
+                   [0, np.cos(a), np.sin(a)],
+                   [0, -np.sin(a), np.cos(a)]])
+    Ry = np.array([[np.cos(b), 0, np.sin(b)],
+                   [0, 1, 0],
+                   [-np.sin(b), 0, np.cos(b)]])
+    Rz = np.array([[np.cos(c), np.sin(c), 0],
+                   [-np.sin(c), np.cos(c), 0],
+                   [0, 0, 1]])
+
+    # Общая матрица поворота
+    R = Rx @ Ry @ Rz
+    rotated_v = []
+    for peak in mas:
+        v = np.array(peak)
+        v_rotated = R @ v + np.array([t_X, t_Y, t_Z])
+        rotated_v.append(v_rotated)
+
+    return rotated_v
+
+
+# функция перспективной проекции
+def zoom(x0, y0, z0, x1, y1, z1, x2, y2, z2):
+    scare = 2500  # Коэффициент масштабирования
+    # Формула перспективной проекции: x' = (n * x / z) + смещение
+    nx0, ny0 = scare * x0 / z0 + 1000, scare * y0 / z0 + 1000
+    nx1, ny1 = scare * x1 / z1 + 1000, scare * y1 / z1 + 1000
+    nx2, ny2 = scare * x2 / z2 + 1000, scare * y2 / z2 + 1000
+    return nx0, ny0, nx1, ny1, nx2, ny2
+
+
+# функция вычисления нормалей вершин для затенения по Гуро
+def guro_shadow(peaks, faces):
+    v_n = np.zeros((len(peaks), 3))
+
+    # для каждого треугольника добавляем его нормаль к вершинам
+    for face in faces:
+        v0 = face[0] - 1
+        v1 = face[1] - 1
+        v2 = face[2] - 1
+        normal = normalize(peaks[v0], peaks[v1], peaks[v2])
+        v_n[v0] += normal
+        v_n[v1] += normal
+        v_n[v2] += normal
+
+    # нормализация нормалей
+    for i in range(len(v_n)):
+        norm = np.linalg.norm(v_n[i])
+        v_n[i] /= norm
+
+    return v_n
+
+
+# основная часть программы
+peaks = rotate(parse_v())  # загрузка и поворот вершин
+faces = parse_f()  # загрузка граней
+vt = parse_vt()  # загрузка текстурных координат
+faces_with_texture = parse_f_with_texture()  # загрузка связей вершин с текстурами
+
+texture = Image.open('bunny-atlas.jpg')
+bunny_atlas_width, bunny_atlas_height = texture.size
+
+# отрисовка модели
+draw_polygon(peaks, faces, vt, faces_with_texture)
+
+# сохранение результата
+image = Image.fromarray(img, mode='RGB')
+image = ImageOps.flip(image)
+image.save("bunny1.jpg")
